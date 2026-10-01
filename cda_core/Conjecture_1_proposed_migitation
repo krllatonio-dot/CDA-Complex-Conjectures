@@ -1,0 +1,90 @@
+import gmpy2
+from gmpy2 import mpc, mpfr, atan2, sin, cos
+
+# Configure precision baseline
+gmpy2.get_context().precision = 53
+
+def execute_complete_cda_pipeline(degree_n, imaginary_part, apply_tilt=False, alpha_coefficient=0.001):
+    u = mpfr('1.0')                  
+    v = mpfr(str(imaginary_part))    
+    c = mpc(u, v)
+    
+    # -------------------------------------------------------------
+    # STEP 1: STAGE I - FIELD PREPARATION & DEGREE-DEPENDENT TILT
+    # -------------------------------------------------------------
+    r = gmpy2.sqrt(u**2 + v**2)
+    phi = atan2(v, u)
+    
+    # DYNAMIC MITIGATION: Calculate tilt relative to the degree-dependent sector spacing
+    if apply_tilt:
+        # Dynamic Delta-Phi changes according to the narrowing sector size
+        sector_spacing = (2 * gmpy2.const_pi()) / degree_n
+        dynamic_delta_phi = mpfr(str(alpha_coefficient)) * sector_spacing
+        phi = phi + dynamic_delta_phi
+
+    k_seed = 0  
+    
+    # -------------------------------------------------------------
+    # STEP 2: STAGE II - SPIN-DEPENDENT SECTOR ALLOCATION
+    # -------------------------------------------------------------
+    theta_k = (2 * gmpy2.const_pi() * k_seed + phi) / degree_n
+    r_0 = mpfr('0.99998') 
+    z_0 = mpc(r_0 * cos(theta_k), r_0 * sin(theta_k))
+    
+    # -------------------------------------------------------------
+    # STEP 3: THE DROP-DOWN PHASE & DISPLACEMENT OPERATOR
+    # -------------------------------------------------------------
+    z_t = z_0
+    max_iterations = 10
+    machine_epsilon = mpfr('2.220446e-16')  
+    
+    for step in range(max_iterations):
+        f_z = z_t**degree_n - c
+        if gmpy2.abs(f_z) < machine_epsilon:
+            break
+            
+        numerator = 2 * z_t * (z_t**degree_n - mpfr('1.0'))
+        denominator = (1 + degree_n) * (z_t**degree_n) + (degree_n - 1)
+        
+        displacement = numerator / denominator
+        z_t = z_t - displacement
+
+    # -------------------------------------------------------------
+    # STEP 4: SECTOR CLASSIFICATION AUDIT
+    # -------------------------------------------------------------
+    final_phase = atan2(z_t.imag, z_t.real)
+    if final_phase < 0:
+        final_phase += 2 * gmpy2.const_pi()
+        
+    k_CDA = int(gmpy2.round((final_phase * degree_n - phi) / (2 * gmpy2.const_pi())))
+    k_CDA = k_CDA % degree_n
+    
+    match_status = "SUCCESS (Landed)" if k_seed == k_CDA else "WANDERED (Mismatched)"
+    final_residual = gmpy2.abs(z_t**degree_n - c)
+    
+    return k_seed, k_CDA, match_status, final_residual, (dynamic_delta_phi if apply_tilt else 0.0)
+
+# -------------------------------------------------------------
+# EXECUTE DYNAMIC MATRIX SWEEP
+# -------------------------------------------------------------
+degree = 60000
+test_intervals = [0.40, 0.50, 0.55, 0.59, 0.60, 0.61, 0.65, 0.70]
+
+print(f"Executing Appendix F Adaptive Field Pipeline Matrix Sweep (n = {degree})")
+print("-" * 90)
+print(f"| Im(c)  | Seed Sector | Captured Sector | Trajectory Tracking Result  | Residual  |")
+print("-" * 90)
+
+for im_v in test_intervals:
+    k_s, k_c, result, resid, _ = execute_complete_cda_pipeline(degree, im_v)
+    print(f"| {im_v:<6} | {k_s:<11} | {k_c:<15} | {result:<27} | {resid:.2e}  |")
+
+print("-" * 90)
+
+print("\nExecuting Weak Imaginary Mitigation Test (Applying Degree-Dependent Adaptive Tilt)")
+print("-" * 90)
+# Running the high-distortion 0.40 run with adaptive tilt scaling enabled
+k_s, k_c, result, resid, applied_tilt = execute_complete_cda_pipeline(degree, 0.40, apply_tilt=True, alpha_coefficient=0.004)
+print(f"| 0.40*  | {k_s:<11} | {k_c:<15} | {result:<27} | {resid:.2e}  |")
+print("-" * 90)
+print(f"Calculated Adaptive Shift Δφ for degree {degree}: {applied_tilt:.4e} radians.")
