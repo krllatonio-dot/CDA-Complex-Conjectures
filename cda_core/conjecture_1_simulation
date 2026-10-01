@@ -1,0 +1,110 @@
+import gmpy2
+from gmpy2 import mpc, mpfr, atan2, sin, cos, exp
+
+# Set precision to match standard IEEE 754 64-bit double precision mantissa limits (53 bits)
+# Change to 128 or 256 for arbitrary multi-mantissa testing as stated in Page 19
+gmpy2.get_context().precision = 53
+
+def execute_complete_cda_pipeline(degree_n, imaginary_part, apply_tilt=False, delta_phi=0.0):
+    # Establish the Target Complex System Profile (Page 26 / Page 40)
+    # Objective function: f(z) = z^n - c, where c = u + iv
+    u = mpfr('1.0')                  # Real component baseline constant
+    v = mpfr(str(imaginary_part))    # Weak imaginary component target
+    c = mpc(u, v)
+    
+    # -------------------------------------------------------------
+    # STEP 1: STAGE I - SCALAR COMPLEX-FIELD PREPARATION (Page 40)
+    # -------------------------------------------------------------
+    # Derived from your complex trace normalizer and two-argument arctangent
+    r = gmpy2.sqrt(u**2 + v**2)
+    phi = atan2(v, u)
+    
+    # If the tilt mitigation is active, inject the phase micro-offset
+    if apply_tilt:
+        phi = phi + mpfr(str(delta_phi))
+
+    # Initialize tracking structures for the 360-degree sector allocation sweep
+    k_seed = 0  # Evaluating the baseline reference channel
+    
+    # -------------------------------------------------------------
+    # STEP 2: STAGE II - SPIN-DEPENDENT SECTOR ALLOCATION (Page 40)
+    # -------------------------------------------------------------
+    # Calculate total phase angle for spin index k
+    theta_k = (2 * gmpy2.const_pi() * k_seed + phi) / degree_n
+    
+    # Generate your micro-offset boundary radius R_0
+    # In your high-degree system, roots compress near the unit ring boundary
+    r_0 = mpfr('0.99998') 
+    
+    # Generate the explicit, localized radar seed coordinate in C
+    z_0 = mpc(r_0 * cos(theta_k), r_0 * sin(theta_k))
+    
+    # -------------------------------------------------------------
+    # STEP 3: THE DROP-DOWN PHASE & DYNAMIC RECIPROCAL LANDING
+    # -------------------------------------------------------------
+    z_t = z_0
+    max_iterations = 10
+    machine_epsilon = mpfr('2.220446e-16')  # Page 27 threshold
+    
+    for step in range(max_iterations):
+        # Local field evaluation
+        f_z = z_t**degree_n - c
+        
+        # Check if the trajectory has achieved the target state of equilibrium
+        if gmpy2.abs(f_z) < machine_epsilon:
+            break
+            
+        # Execute your Complex CDA Landing Operator (Page 38 Appendix E.2)
+        # Bypasses Taylor explosions via rational balancing of the degree bounds
+        numerator = 2 * z_t * (z_t**degree_n - mpfr('1.0'))
+        denominator = (1 + degree_n) * (z_t**degree_n) + (degree_n - 1)
+        
+        # Calculate localized velocity traction and execute coordinate displacement
+        displacement = numerator / denominator
+        z_t = z_t - displacement
+
+    # -------------------------------------------------------------
+    # STEP 4: SECTOR ENTRY AND CLASSIFICATION COMPLIANCE
+    # -------------------------------------------------------------
+    # Re-extract the angular coordinate position of the landed landing spot
+    final_phase = atan2(z_t.imag, z_t.real)
+    if final_phase < 0:
+        final_phase += 2 * gmpy2.const_pi()
+        
+    # De-serialize the final coordinate to back-calculate which sector it captured
+    k_CDA = int(gmpy2.round((final_phase * degree_n - phi) / (2 * gmpy2.const_pi())))
+    
+    # Ensure cyclic index wrapping on the 60,000 grid bounds
+    k_CDA = k_CDA % degree_n
+    
+    # Validate Tracking Integrity
+    match_status = "SUCCESS (Landed)" if k_seed == k_CDA else "WANDERED (Mismatched)"
+    final_residual = gmpy2.abs(z_t**degree_n - c)
+    
+    return k_seed, k_CDA, match_status, final_residual
+
+# -------------------------------------------------------------
+# RUNNING THE EXPERIMENTAL APPARENT DISPLACEMENT INTERVALS
+# -------------------------------------------------------------
+degree = 60000
+test_intervals = [0.40, 0.50, 0.55, 0.59, 0.60, 0.61, 0.65, 0.70]
+
+print(f"Executing Appendix F Field Pipeline Matrix Sweep (n = {degree})")
+print("-" * 85)
+print(f"| Im(c)  | Seed Sector | Captured Sector | Trajectory Tracking Result  | Residual  |")
+print("-" * 85)
+
+for im_v in test_intervals:
+    # Run the unmitigated baseline tracking model
+    k_s, k_c, result, resid = execute_complete_cda_pipeline(degree, im_v)
+    print(f"| {im_v:<6} | {k_s:<11} | {k_c:<15} | {result:<27} | {resid:.2e}  |")
+
+print("-" * 85)
+
+print("\nExecuting Weak Imaginary Mitigation Test (Injecting Tilt Boundary Shift)")
+print("-" * 85)
+# Test on the high-distortion 0.40 coordinate with a corrective phase tilt angle injected
+k_s, k_c, result, resid = execute_complete_cda_pipeline(degree, 0.40, apply_tilt=True, delta_phi=0.0005)
+print(f"| 0.40*  | {k_s:<11} | {k_c:<15} | {result:<27} | {resid:.2e}  |")
+print("-" * 85)
+print("(*) Denotes tilt-corrected execution loop to thread the compressed fractal boundary.")
